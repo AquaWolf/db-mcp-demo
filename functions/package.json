@@ -1,0 +1,23 @@
+{
+  "name": "db-mcp-demo",
+  "version": "1.0.0",
+  "description": "DB Timetable MCP Demo with Genkit",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "genkit:start": "genkit start --",
+    "deploy": "firebase deploy --only functions"
+  },
+  "dependencies": {
+    "@genkit-ai/firebase": "^0.5.0",
+    "@genkit-ai/googleai": "^0.5.0",
+    "axios": "^1.6.0",
+    "genkit": "^0.5.0",
+    "zod": "^3.22.0",
+    "firebase-admin": "^11.0.0",
+    "firebase-functions": "^4.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
