@@ -2,6 +2,7 @@ import { genkit, z } from 'genkit';
 import { googleAI, gemini15Flash } from '@genkit-ai/googleai';
 import { firebase } from '@genkit-ai/firebase';
 import { createMcpClient } from '@genkit-ai/mcp';
+import { onCallGenkit } from 'firebase-functions/v2/https';
 
 // 1. Initialisiere Genkit
 const ai = genkit({
@@ -19,13 +20,12 @@ const dbMcpClient = createMcpClient({
   },
 });
 
-// 3. Schema für Chat History
+// 3. Schema Definitionen
 const MessageSchema = z.object({
   role: z.enum(['user', 'model', 'system']),
   content: z.array(z.object({ text: z.string() })),
 });
 
-// Hybrides Output Schema für Flutter
 const UniversalResponseSchema = z.object({
   text: z.string(),
   responseType: z.enum(["GENERAL", "TRAIN_STATUS"]),
@@ -41,7 +41,7 @@ const UniversalResponseSchema = z.object({
   }).optional(),
 });
 
-// 4. Der Hybride Flow mit History Unterstützung
+// 4. Der Haupt-Flow
 export const smartAssistantFlow = ai.defineFlow(
   {
     name: 'smartAssistantFlow',
@@ -58,20 +58,23 @@ export const smartAssistantFlow = ai.defineFlow(
       prompt: input.prompt,
       history: input.history,
       tools: mcpTools,
-      output: {
-        schema: UniversalResponseSchema
-      },
-      system: `Du bist ein intelligenter Reisebegleiter der Deutschen Bahn.
-      Du hast Zugriff auf die Chat-Historie, um den Kontext zu verstehen.
-      Schritt 1: Nutze bei Bahnanfragen den MCP Server (search_station, get_timetable).
-      Schritt 2: Wenn du Zugdaten lieferst, setze responseType auf 'TRAIN_STATUS' und befülle 'richCard'.
-      Schritt 3: Bei allgemeinen Fragen setze responseType auf 'GENERAL'.
-      Zeitformat: HH:mm.`,
+      output: { schema: UniversalResponseSchema },
+      system: `Du bist ein DB Reiseassistent. Nutze den MCP Server.`,
     });
 
     const result = response.output();
-    if (!result) throw new Error("Keine Antwort generiert.");
-
+    if (!result) throw new Error("No output generated");
     return result;
   }
 );
+
+// 5. Firebase Cloud Function mit Autorisierung exposen
+// Diese Funktion prüft automatisch den Firebase Auth-Status der Flutter App.
+export const smartAssistantFunction = onCallGenkit({
+  authPolicy: (auth) => {
+    // Demo-Policy: Nur eingeloggte Nutzer dürfen die KI nutzen
+    if (!auth) {
+      throw new Error('Nicht autorisiert! Bitte logge dich in der App ein.');
+    }
+  },
+}, smartAssistantFlow);
