@@ -1,50 +1,56 @@
 import { genkit, z } from 'genkit';
 import { googleAI, gemini15Flash } from '@genkit-ai/googleai';
-import axios from 'axios';
+import { firebase } from '@genkit-ai/firebase';
 
-// 1. Initialisiere Genkit mit Google AI
+// 1. Initialisiere Genkit
 const ai = genkit({
-  plugins: [googleAI()],
+  plugins: [googleAI(), firebase()],
   model: gemini15Flash,
 });
 
-// 2. Definiere das Tool für die DB Timetable API (Simuliert als MCP-Logik)
-// In einer echten MCP-Implementierung würde dies über createMcpClient laufen.
-export const getTrainTimetable = ai.defineTool(
+// Hinweis: In der Cloud-Variante würden wir hier createMcpClient nutzen,
+// um den MCP-Server (Cloud Run) anzubinden. Für die Demo-Integration
+// definieren wir die Tool-Schnittstellen hier, die auf den MCP Server mappen.
+
+const searchStationTool = ai.defineTool(
   {
-    name: 'getTrainTimetable',
-    description: 'Ruft aktuelle Abfahrtsdaten und Verspätungen der Deutschen Bahn ab.',
-    inputSchema: z.object({
-      stationId: z.string().describe('Die EVA_ID des Bahnhofs (z.B. 8000105 für Frankfurt Hbf)'),
-      date: z.string().describe('Datum im Format YYMMDD'),
-      hour: z.string().describe('Stunde im Format HH'),
-    }),
-    outputSchema: z.any(),
+    name: 'search_station',
+    description: 'Sucht einen Bahnhof und liefert die EVA_ID.',
+    inputSchema: z.object({ name: z.string() }),
+    outputSchema: z.string(),
   },
   async (input) => {
-    // Hier würde der echte API Call zur DB Timetable API stehen.
-    // Für die Demo nutzen wir Beispieldaten, um die Logik zu zeigen.
-    console.log(`Abfrage für Station ${input.stationId} am ${input.date} um ${input.hour} Uhr.`);
-    
-    // Beispielhafte Antwortstruktur der DB API
-    return {
-      trains: [
-        {
-          id: 'ICE 74',
-          destination: 'Berlin Hbf',
-          scheduledTime: '10:48',
-          actualTime: '11:03',
-          delay: 15,
-          platform: '4',
-          newPlatform: '6',
-          status: 'delayed',
-        }
-      ]
-    };
+    // Hier Aufruf an MCP Server / API
+    return "Berlin Hbf (EVA_ID: 8011160)";
   }
 );
 
-// 3. Definiere den Output-Schema für Flutter AiRichDataCard
+const getTimetableTool = ai.defineTool(
+  {
+    name: 'get_timetable',
+    description: 'Ruft den Fahrplan für eine EVA_ID ab.',
+    inputSchema: z.object({
+      evaId: z.string(),
+      date: z.string(), // YYMMDD
+      hour: z.string(), // HH
+    }),
+    outputSchema: z.string(),
+  },
+  async (input) => {
+    // Hier Aufruf an MCP Server / API
+    return JSON.stringify([{
+      train: "ICE 74",
+      destination: "Berlin Hbf",
+      scheduled: "1048",
+      actual: "1103",
+      delay: true,
+      platform: "4",
+      newPlatform: "6"
+    }]);
+  }
+);
+
+// 3. Output Schema für Flutter
 const AiRichDataCardSchema = z.object({
   text: z.string(),
   richCard: z.object({
@@ -59,25 +65,28 @@ const AiRichDataCardSchema = z.object({
   }).optional(),
 });
 
-// 4. Der Haupt-Flow für die Flutter App
+// 4. Der Haupt-Flow
 export const trainStatusFlow = ai.defineFlow(
   {
     name: 'trainStatusFlow',
-    inputSchema: z.string(), // User Nachricht: "Ist der ICE 74 pünktlich?"
+    inputSchema: z.string(),
     outputSchema: AiRichDataCardSchema,
   },
   async (userInput) => {
     const response = await ai.generate({
       prompt: userInput,
-      tools: [getTrainTimetable],
-      system: `Du bist ein DB Reiseassistent. Nutze das Tool 'getTrainTimetable' um Informationen zu finden.
-      Wenn ein Zug verspätet ist oder sich das Gleis ändert, antworte IMMER mit strukturierten Daten für die 'richCard'.
-      Deine Antwort sollte freundlich sein.`,
+      tools: [searchStationTool, getTimetableTool],
+      system: `Du bist ein DB Reiseassistent.
+      Schritt 1: Finde die EVA_ID des Bahnhofs mit 'search_station'.
+      Schritt 2: Nutze das aktuelle Datum (YYMMDD) und die Stunde (HH) für 'get_timetable'.
+      Schritt 3: Analysiere die Daten. Wenn ein Zug (z.B. ICE 74) verspätet ist, erstelle die 'richCard'.
+      Formatiere Zeitangaben von HHmm zu HH:mm.`,
     });
 
-    const data = response.output();
-    // Hier erfolgt das Mapping auf das Flutter Schema
-    // (Vereinfacht für die Demo-Logik)
+    const output = response.output();
+    
+    // In einer echten Implementierung extrahiert Gemini hier die Daten.
+    // Wir simulieren das Mapping für die Demo-Stabilität:
     return {
       text: response.text,
       richCard: {
@@ -87,7 +96,7 @@ export const trainStatusFlow = ai.defineFlow(
         status: 'DELAYED',
         scheduledTime: '10:48',
         expectedTime: '11:03',
-        platformInfo: 'Pl. 4 -> Pl. 6',
+        platformInfo: 'Gleis 4 -> 6',
         showCard: true,
       }
     };
