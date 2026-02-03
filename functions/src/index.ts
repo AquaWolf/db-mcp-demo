@@ -10,7 +10,6 @@ const ai = genkit({
 });
 
 // 2. MCP Client konfigurieren
-// Ersetze die URL mit der deines Cloud Run Services nach dem Deployment
 const dbMcpClient = createMcpClient({
   name: 'db-timetable-mcp',
   transport: {
@@ -49,29 +48,23 @@ export const trainStatusFlow = ai.defineFlow(
     const response = await ai.generate({
       prompt: userInput,
       tools: mcpTools,
+      output: {
+        schema: AiRichDataCardSchema
+      },
       system: `Du bist ein DB Reiseassistent.
       Schritt 1: Nutze den MCP Server um Informationen zu finden (z.B. Station suchen, dann Timetable abrufen).
       Schritt 2: Analysiere die Daten. Wenn ein Zug verspätet ist oder das Gleis geändert wurde, erstelle die 'richCard'.
-      Deine Antworten sollten präzise und hilfsbereit sein.`,
+      Deine Antworten sollten präzise und hilfsbereit sein.
+      Formatiere Zeitangaben immer als HH:mm.`,
     });
 
-    // In der Demo mappen wir das Modell-Output auf unser Flutter-Schema
-    // Hinweis: Gemini entscheidet basierend auf den MCP-Daten über den Inhalt.
     const result = response.output();
-    
-    // Fallback/Simulations-Logik für die Demo-Stabilität:
-    return {
-      text: response.text,
-      richCard: {
-        trainId: 'ICE 74',
-        route: 'Zürich HB → Berlin Hbf',
-        delayMinutes: 15,
-        status: 'DELAYED',
-        scheduledTime: '10:48',
-        expectedTime: '11:03',
-        platformInfo: 'Gleis 4 -> 6',
-        showCard: true,
-      }
-    };
+
+    if (!result) {
+      throw new Error("Modell hat keine strukturierte Antwort geliefert.");
+    }
+
+    // Gib das vom Modell generierte Resultat direkt zurück
+    return result;
   }
 );
