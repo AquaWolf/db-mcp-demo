@@ -19,10 +19,16 @@ const dbMcpClient = createMcpClient({
   },
 });
 
-// 3. Hybrides Output Schema für Flutter (Universal Response)
+// 3. Schema für Chat History
+const MessageSchema = z.object({
+  role: z.enum(['user', 'model', 'system']),
+  content: z.array(z.object({ text: z.string() })),
+});
+
+// Hybrides Output Schema für Flutter
 const UniversalResponseSchema = z.object({
-  text: z.string().describe("Die Antwort des Assistenten (Textform)"),
-  responseType: z.enum(["GENERAL", "TRAIN_STATUS"]).describe("Gibt an, ob eine Rich Card angezeigt werden soll"),
+  text: z.string(),
+  responseType: z.enum(["GENERAL", "TRAIN_STATUS"]),
   richCard: z.object({
     trainId: z.string(),
     route: z.string(),
@@ -32,38 +38,39 @@ const UniversalResponseSchema = z.object({
     expectedTime: z.string(),
     platformInfo: z.string(),
     showCard: z.boolean(),
-  }).optional().describe("Daten für das AiRichDataCard Widget in Flutter"),
+  }).optional(),
 });
 
-// 4. Der Hybride Flow
+// 4. Der Hybride Flow mit History Unterstützung
 export const smartAssistantFlow = ai.defineFlow(
   {
     name: 'smartAssistantFlow',
-    inputSchema: z.string(),
+    inputSchema: z.object({
+      prompt: z.string(),
+      history: z.array(MessageSchema).optional(),
+    }),
     outputSchema: UniversalResponseSchema,
   },
-  async (userInput) => {
-    // Hole dynamisch die Tools vom MCP Server
+  async (input) => {
     const mcpTools = await dbMcpClient.getActiveTools(ai);
 
     const response = await ai.generate({
-      prompt: userInput,
+      prompt: input.prompt,
+      history: input.history,
       tools: mcpTools,
       output: {
         schema: UniversalResponseSchema
       },
-      system: `Du bist ein intelligenter Reisebegleiter.
-      Schritt 1: Entscheide, ob der User eine Bahnauskunft möchte oder eine allgemeine Frage stellt.
-      Schritt 2: Bei Bahnanfragen nutze den MCP Server (search_station, get_timetable).
-      Schritt 3: Wenn du Zugdaten lieferst, setze responseType auf 'TRAIN_STATUS' und befülle 'richCard'.
-      Schritt 4: Bei allen anderen Fragen antworte freundlich, setze responseType auf 'GENERAL' und lasse 'richCard' weg.
+      system: `Du bist ein intelligenter Reisebegleiter der Deutschen Bahn.
+      Du hast Zugriff auf die Chat-Historie, um den Kontext zu verstehen.
+      Schritt 1: Nutze bei Bahnanfragen den MCP Server (search_station, get_timetable).
+      Schritt 2: Wenn du Zugdaten lieferst, setze responseType auf 'TRAIN_STATUS' und befülle 'richCard'.
+      Schritt 3: Bei allgemeinen Fragen setze responseType auf 'GENERAL'.
       Zeitformat: HH:mm.`,
     });
 
     const result = response.output();
-    if (!result) {
-      throw new Error("Keine Antwort vom Modell generiert.");
-    }
+    if (!result) throw new Error("Keine Antwort generiert.");
 
     return result;
   }
