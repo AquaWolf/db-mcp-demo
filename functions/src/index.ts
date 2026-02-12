@@ -1,25 +1,24 @@
 import { genkit, z } from 'genkit';
-import { googleAI, gemini15Flash } from '@genkit-ai/googleai';
-import { firebase } from '@genkit-ai/firebase';
-import { createMcpClient } from '@genkit-ai/mcp';
-import { onCallGenkit } from 'firebase-functions/v2/https';
+import { googleAI } from '@genkit-ai/google-genai';
+import { createMcpHost } from '@genkit-ai/mcp';
+import { onCall } from 'firebase-functions/v2/https';
 
+console.log("Starting Genkit initialization...");
 // 1. Initialisiere Genkit
-const ai = genkit({
-  plugins: [googleAI(), firebase()],
-  model: gemini15Flash,
+export const ai = genkit({
+  plugins: [googleAI()],
 });
 
-// 2. MCP Client konfigurieren
-const dbMcpClient = createMcpClient({
-  name: 'db-timetable-mcp',
-  transport: {
-    sse: {
-      url: process.env.DB_MCP_SERVER_URL || 'http://localhost:3001/sse',
-    },
-  },
+// 2. Configure the MCP Host (Management Object)
+const dbHost = createMcpHost({
+  name: 'db-timetable-host',
+  mcpServers: {
+    // 'db' becomes the namespace (e.g. db/search_station)
+    db: { url: 'http://127.0.0.1:3001/sse' }
+  }
 });
 
+console.log("Starting Genkit Message Schema Definition...");
 // 3. Schema Definitionen
 const MessageSchema = z.object({
   role: z.enum(['user', 'model', 'system']),
@@ -41,7 +40,8 @@ const UniversalResponseSchema = z.object({
   }).optional(),
 });
 
-// 4. Der Haupt-Flow
+console.log("Starting Genkit Flow Definition...");
+// 4. Define the flow separately
 export const smartAssistantFlow = ai.defineFlow(
   {
     name: 'smartAssistantFlow',
@@ -52,29 +52,50 @@ export const smartAssistantFlow = ai.defineFlow(
     outputSchema: UniversalResponseSchema,
   },
   async (input) => {
-    const mcpTools = await dbMcpClient.getActiveTools(ai);
+    const mcpTools = await dbHost.getActiveTools(ai);
+    console.log(`Available tools: ${mcpTools.map(t => t.name).join(', ')}`); // Check your terminal!
+
+    if (mcpTools.length === 0) {
+      throw new Error("No tools found! Is the MCP server running on 3001?");
+    }
+
+    const messages = [...(input.history || [])];
+    messages.push({ role: 'user', content: [{ text: input.prompt }] });
 
     const response = await ai.generate({
-      prompt: input.prompt,
-      history: input.history,
+      messages: messages,
       tools: mcpTools,
+      model: googleAI.model('gemini-2.5-flash'),
+      system: `Du bist ein DB Reiseassistent. Die aktuelle Zeit ist ${new Date().toLocaleString("de-DE", { timeZone: "Europe/Berlin" })}. Nutze den MCP Server um Informationen zu finden. Wenn du dem Benutzer final antwortest, nutze das vorgegebene JSON-Format. Wenn ein Fehler auftritt oder keine Daten gefunden werden, setze responseType auf 'GENERAL' und erkläre das Problem im 'text' Feld.`,
       output: { schema: UniversalResponseSchema },
-      system: `Du bist ein DB Reiseassistent. Nutze den MCP Server.`,
+      config: {
+        temperature: 0.8,
+      },
     });
 
-    const result = response.output();
+    const result = response.output;
     if (!result) throw new Error("No output generated");
     return result;
   }
 );
-
-// 5. Firebase Cloud Function mit Autorisierung exposen
-// Diese Funktion prüft automatisch den Firebase Auth-Status der Flutter App.
-export const smartAssistantFunction = onCallGenkit({
-  authPolicy: (auth) => {
-    // Demo-Policy: Nur eingeloggte Nutzer dürfen die KI nutzen
-    if (!auth) {
+console.log("Starting Genkit Expose as Cloud Function using onCall...");
+// 5. Expose as Cloud Function using onCall
+export const smartAssistantFunction = onCall(
+  async (request) => {
+    // Auth Policy Check
+    if (!request.auth) {
       throw new Error('Nicht autorisiert! Bitte logge dich in der App ein.');
     }
-  },
-}, smartAssistantFlow);
+
+    // Run the flow with auth context
+    const result = await smartAssistantFlow.run(
+      request.data,
+      {
+        context: {
+          auth: request.auth
+        }
+      }
+    );
+    return result;
+  }
+);
